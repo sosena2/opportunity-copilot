@@ -2,4 +2,5 @@
 .env
 __pycache__/
 *.db
-data/cv.*
+data/cv/*
+!data/cv/sample_cv.md
