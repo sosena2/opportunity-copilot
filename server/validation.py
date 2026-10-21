@@ -74,3 +74,16 @@ def validate_limit(value: int, maximum: int = 50) -> int:
     if not isinstance(value, int) or value < 1 or value > maximum:
         raise ValueError(f"limit must be a whole number from 1 to {maximum}.")
     return value
+def validate_id(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise InputError(
+            "opportunity_id must be a whole number of 1 or more. "
+            "Use list_saved_opportunities to see the ids."
+        )
+    return value
+
+
+def validate_days(value: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > 90:
+        raise InputError("days must be a whole number from 1 to 90.")
+    return value

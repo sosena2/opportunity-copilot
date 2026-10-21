@@ -5,6 +5,8 @@ so printing would corrupt them. Log to stderr only.
 """
 import logging
 import sys
+import threading
+from datetime import date
 
 from dotenv import load_dotenv
 
@@ -18,12 +20,21 @@ logging.basicConfig(
 
 from mcp.server import MCPServer  # noqa: E402
 
-from server import cv, db, github, validation as v, web  # noqa: E402
+from server import cv, db, embeddings, github, matching, validation as v, web  # noqa: E402
 
 log = logging.getLogger("copilot.server")
 
 mcp = MCPServer("opportunity-copilot")
 db.init_db()
+threading.Thread(target=embeddings.warm_up, daemon=True).start()
+
+
+def _line(r: dict) -> str:
+    return (
+        f"#{r['id']} [{r['status']}] {r['title']} at {r['organization']} "
+        f"({r['category']}) | deadline: {r['deadline'] or 'not set'}"
+        + (f" | {r['url']}" if r["url"] else "")
+    )
 
 
 @mcp.tool()
@@ -79,15 +90,7 @@ def list_saved_opportunities(status: str = "", category: str = "", limit: int = 
     rows = db.fetch_opportunities(status, category, limit)
     if not rows:
         return "No saved opportunities match. The tracker is empty or the filters are too narrow."
-
-    lines = []
-    for r in rows:
-        lines.append(
-            f"#{r['id']} [{r['status']}] {r['title']} at {r['organization']} "
-            f"({r['category']}) | deadline: {r['deadline'] or 'not set'}"
-            + (f" | {r['url']}" if r["url"] else "")
-        )
-    return "\n".join(lines)
+    return "\n".join(_line(r) for r in rows)
 
 
 @mcp.tool()
@@ -151,6 +154,135 @@ def summarize_github_profile(username: str) -> str:
         username: GitHub username, e.g. "octocat".
     """
     return github.profile_summary(username)
+
+
+@mcp.tool()
+def rank_opportunities(status: str = "saved", limit: int = 10, cv_filename: str = "") -> str:
+    """Rank the user's saved opportunities by how well they fit the user's CV.
+
+    Use this when the user asks which saved opportunities suit them best or which to
+    apply to first. It compares meaning, not just keywords, and needs a CV in the CV
+    folder. The score is a similarity between 0 and 1 for comparing opportunities with
+    each other: higher is a closer fit. It does not check eligibility rules such as
+    age, country or degree level. Use explain_match to see why one opportunity ranks
+    where it does.
+
+    Args:
+        status: Which opportunities to rank: saved (default), applied, interview, accepted, rejected, or "all".
+        limit: How many to return, from 1 to 50 (default 10).
+        cv_filename: Optional CV file name. Leave empty for the main CV.
+    """
+    status = "" if status.strip().lower() == "all" else v.validate_status(status)
+    limit = v.validate_limit(limit)
+    opps = db.fetch_opportunities(status, "", 50)
+    if not opps:
+        return "No opportunities to rank. Save some with save_opportunity first."
+    name, cv_text = cv.read_cv_text(cv_filename)
+    ranked = matching.rank(cv_text, opps)[:limit]
+    lines = [f"Ranking against CV file: {name}"]
+    for i, (o, score) in enumerate(ranked, 1):
+        shared = matching.shared_keywords(cv_text, matching.opportunity_text(o), 5)
+        lines.append(
+            f"{i}. similarity {score:.2f} | {_line(o)}"
+            + (f" | shared terms: {', '.join(shared)}" if shared else "")
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def explain_match(opportunity_id: int, cv_filename: str = "") -> str:
+    """Explain why one saved opportunity fits (or does not fit) the user's CV.
+
+    Use this after rank_opportunities when the user asks why an opportunity ranked
+    high or low. It shows the lines of the CV that match the opportunity best and the
+    terms they share. It does not check eligibility rules.
+
+    Args:
+        opportunity_id: The number shown as #id in list_saved_opportunities.
+        cv_filename: Optional CV file name. Leave empty for the main CV.
+    """
+    opportunity_id = v.validate_id(opportunity_id)
+    opp = db.get_opportunity(opportunity_id)
+    name, cv_text = cv.read_cv_text(cv_filename)
+    overall, best, shared = matching.explain(cv_text, opp)
+    lines = [
+        f"Match explanation for {_line(opp)}",
+        f"CV file: {name}",
+        f"Overall similarity: {overall:.2f} (compare with other opportunities; not a percentage)",
+        "Parts of the CV that fit best:",
+    ]
+    for text, score in best:
+        lines.append(f"- ({score:.2f}) {text}")
+    if not best:
+        lines.append("- The CV has no lines long enough to compare.")
+    lines.append("Terms shared with the opportunity: " + (", ".join(shared) or "none"))
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def update_status(opportunity_id: int, status: str) -> str:
+    """Move a saved opportunity to a new stage of the application pipeline.
+
+    Use this when the user says they applied, got an interview, were accepted or
+    were rejected. Valid stages: saved, applied, interview, accepted, rejected.
+    Each change is recorded with a date.
+
+    Args:
+        opportunity_id: The number shown as #id in list_saved_opportunities.
+        status: The new stage: saved, applied, interview, accepted or rejected.
+    """
+    opportunity_id = v.validate_id(opportunity_id)
+    status = v.validate_status(status)
+    old = db.set_status(opportunity_id, status)
+    log.info("status changed id=%s %s->%s", opportunity_id, old, status)
+    return f"Opportunity #{opportunity_id} moved from '{old}' to '{status}'."
+
+
+@mcp.tool()
+def pipeline_stats() -> str:
+    """Show the user's application progress: counts per stage and per category.
+
+    Use this when the user asks how their applications are going, how many they have
+    sent, or wants an overview of their tracker.
+    """
+    counts = db.status_counts()
+    total = sum(counts.values())
+    if total == 0:
+        return "The tracker is empty. Save some opportunities first."
+    submitted = counts["applied"] + counts["interview"] + counts["accepted"] + counts["rejected"]
+    progressed = counts["interview"] + counts["accepted"]
+    lines = [
+        f"Total tracked: {total}",
+        "By stage: " + " | ".join(f"{s}: {counts[s]}" for s in db.STATUS_ORDER),
+        "By category: " + ", ".join(f"{c}: {n}" for c, n in db.category_counts().items()),
+        f"Applications submitted: {submitted} of {total}",
+    ]
+    if submitted:
+        lines.append(f"Reached interview or acceptance: {progressed} of {submitted} submitted")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def upcoming_deadlines(days: int = 14) -> str:
+    """List saved opportunities whose deadline is coming soon and that the user has not applied to yet.
+
+    Use this when the user asks what is due soon, what to apply to this week, or wants
+    a deadline reminder.
+
+    Args:
+        days: Look ahead this many days, from 1 to 90 (default 14).
+    """
+    days = v.validate_days(days)
+    rows = db.upcoming(days)
+    if not rows:
+        return f"Nothing due in the next {days} days among opportunities you have not applied to."
+    today = date.today()
+    lines = []
+    for r in rows:
+        left = (date.fromisoformat(r["deadline"]) - today).days
+        when = "today" if left == 0 else f"in {left} day{'s' if left != 1 else ''}"
+        lines.append(f"{when}: {_line(r)}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":
