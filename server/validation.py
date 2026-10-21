@@ -4,6 +4,8 @@ import re
 from datetime import datetime
 from urllib.parse import urlparse
 
+from server.errors import InputError
+
 CATEGORIES = {"scholarship", "internship", "job", "fellowship"}
 STATUSES = {"saved", "applied", "interview", "accepted", "rejected"}
 

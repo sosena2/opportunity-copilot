@@ -6,6 +6,7 @@ so printing would corrupt them. Log to stderr only.
 import logging
 import sys
 import threading
+import argparse
 from datetime import date
 
 from dotenv import load_dotenv
@@ -35,6 +36,38 @@ def _line(r: dict) -> str:
         f"({r['category']}) | deadline: {r['deadline'] or 'not set'}"
         + (f" | {r['url']}" if r["url"] else "")
     )
+
+
+@mcp.resource(
+    "opportunity://tracker",
+    name="opportunity-tracker",
+    description="Current saved opportunities and their application statuses.",
+    mime_type="text/plain",
+)
+def opportunity_tracker_resource() -> str:
+    """Expose the current tracker as read-only MCP context."""
+    rows = db.fetch_opportunities("", "", 50)
+    if not rows:
+        return "The opportunity tracker is empty."
+    return "\n".join(_line(row) for row in rows)
+
+
+@mcp.prompt(
+    name="review-opportunities",
+    description="Guide an AI review of saved opportunities and next actions.",
+)
+def review_opportunities_prompt() -> list[dict[str, str]]:
+    """Provide a reusable MCP prompt for reviewing the tracker."""
+    return [
+        {
+            "role": "user",
+            "content": (
+                "Review the saved opportunities in the opportunity://tracker resource. "
+                "Summarize the pipeline, highlight approaching deadlines, and recommend "
+                "the next two actions. Do not save or update anything without asking me."
+            ),
+        }
+    ]
 
 
 @mcp.tool()
@@ -286,4 +319,22 @@ def upcoming_deadlines(days: int = 14) -> str:
 
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    parser = argparse.ArgumentParser(description="Run the Opportunity Copilot MCP server.")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "streamable-http"),
+        default="stdio",
+        help="MCP transport (default: stdio)",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host")
+    parser.add_argument("--port", type=int, default=8000, help="HTTP port")
+    args = parser.parse_args()
+    if args.transport == "stdio":
+        mcp.run(transport="stdio")
+    else:
+        mcp.run(
+            transport="streamable-http",
+            host=args.host,
+            port=args.port,
+            streamable_http_path="/mcp",
+        )
