@@ -112,17 +112,18 @@ Example tool arguments:
  "arguments": {"status": "saved", "limit": 10}}
 ```
 
-## Demo
+## Demo: multiple tools and failure recovery
 
-The demo exercises at least two tools in one request and then demonstrates recovery
-from a failed tracker call:
+The repeatable demo uses two tracker tools, intentionally makes one invalid tracker
+call, and continues with a third tool after the error:
 
 ```powershell
 python -m client.demo
 ```
 
-The demo needs `GEMINI_API_KEY` and network access. It may ask for save approval if
-Gemini decides that saving a result is useful.
+The demo uses the local stdio server and does not need a Gemini key or network
+access. The interactive Gemini agent supports the same multi-tool and recovery
+pattern for live opportunity searches.
 
 ## Tests
 
