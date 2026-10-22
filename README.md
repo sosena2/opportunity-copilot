@@ -64,6 +64,19 @@ Gemini client currently starts the local stdio server directly:
 python -m client.agent "Which saved opportunities should I apply to first?"
 ```
 
+The client can also connect to an already-running Streamable HTTP server:
+
+```powershell
+$env:MCP_AUTH_TOKEN = "your-long-random-token"
+python -m client.agent --transport streamable-http `
+  --url http://127.0.0.1:8000/mcp `
+  "Which saved opportunities should I apply to first?"
+```
+
+Use `--transport stdio` (the default) or `--transport streamable-http`. The
+HTTP token is read from `MCP_AUTH_TOKEN` and is never accepted as a command-line
+argument.
+
 Use MCP Inspector to inspect either transport:
 
 ```powershell

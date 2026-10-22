@@ -9,8 +9,11 @@ Usage (from the project root, with the virtual environment active):
     python -m client.agent "your request"      one request, then exit
 """
 import asyncio
+import argparse
+from contextlib import asynccontextmanager
 import json
 import logging
+import os
 import re
 import sys
 from pathlib import Path
@@ -25,6 +28,9 @@ logging.getLogger("copilot").setLevel(logging.INFO)
 
 from mcp.client import Client  # noqa: E402
 from mcp.client.stdio import StdioServerParameters  # noqa: E402
+from mcp import ClientSession  # noqa: E402
+from mcp.client.streamable_http import streamable_http_client  # noqa: E402
+import httpx2  # noqa: E402
 
 from client.llm import GeminiLLM, LLMError  # noqa: E402
 
@@ -84,6 +90,36 @@ def is_in_scope(user_text: str) -> bool:
     if normalized in ALLOWED_GENERAL_REQUESTS or normalized in ALLOWED_FOLLOW_UPS:
         return True
     return any(re.search(rf"\b{re.escape(term)}\b", normalized) for term in DOMAIN_TERMS)
+
+
+@asynccontextmanager
+async def connect_mcp(
+    transport: str,
+    url: str,
+):
+    """Connect to the server using the selected MCP transport."""
+    if transport == "stdio":
+        params = StdioServerParameters(
+            command=sys.executable,
+            args=["-m", "server.main"],
+            cwd=str(ROOT),
+        )
+        async with Client(params) as session:
+            yield session
+        return
+
+    token = os.environ.get("MCP_AUTH_TOKEN", "").strip()
+    if not token:
+        raise LLMError(
+            "MCP_AUTH_TOKEN is empty. Set it before using Streamable HTTP, "
+            "or select --transport stdio."
+        )
+    headers = {"Authorization": f"Bearer {token}"}
+    async with httpx2.AsyncClient(headers=headers) as http_client:
+        async with streamable_http_client(url, http_client=http_client) as (read_stream, write_stream):
+            async with ClientSession(read_stream, write_stream) as session:
+                await session.initialize()
+                yield session
 
 
 def result_text(result) -> str:
@@ -148,18 +184,32 @@ async def run_turn(llm, session, known: set[str], user_text: str, approve=ask_ap
 
 
 async def chat() -> None:
-    params = StdioServerParameters(command=sys.executable, args=["-m", "server.main"], cwd=str(ROOT))
-    async with Client(params) as session:
+    parser = argparse.ArgumentParser(description="Run the Opportunity Copilot MCP client.")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "streamable-http"),
+        default=os.environ.get("MCP_TRANSPORT", "stdio"),
+        help="MCP transport (default: stdio)",
+    )
+    parser.add_argument(
+        "--url",
+        default=os.environ.get("MCP_URL", "http://127.0.0.1:8000/mcp"),
+        help="Streamable HTTP MCP endpoint",
+    )
+    parser.add_argument("request", nargs="*", help="Optional one-shot request")
+    args = parser.parse_args()
+
+    async with connect_mcp(args.transport, args.url) as session:
         tools = (await session.list_tools()).tools
         known = {t.name for t in tools}
-        print(f"Connected to the MCP server. {len(tools)} tools available.")
+        print(f"Connected using {args.transport}. {len(tools)} tools available.")
         try:
             llm = GeminiLLM(SYSTEM_PROMPT, tools)
         except LLMError as e:
             print(e)
             return
 
-        one_shot = " ".join(sys.argv[1:]).strip()
+        one_shot = " ".join(args.request).strip()
         if one_shot:
             try:
                 print("\n" + await run_turn(llm, session, known, one_shot))
