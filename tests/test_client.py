@@ -170,6 +170,22 @@ def test_read_tools_can_run_as_one_model_batch():
     assert session.calls == ["read_cv", "read_cv"]
 
 
+def test_unrelated_request_is_rejected_before_the_model_is_called():
+    class UnexpectedLLM:
+        def mark(self):
+            raise AssertionError("out-of-scope requests must not reach the model")
+
+    result = run(agent.run_turn(UnexpectedLLM(), FakeSession(), set(), "What are the symptoms of flu?"))
+    assert "Opportunity Copilot" in result
+
+
+def test_opportunity_request_reaches_the_model(monkeypatch):
+    llm, client = make_llm([text_response("Here are some internships.")], monkeypatch)
+    result = run(agent.run_turn(llm, FakeSession(), {"read_cv"}, "Find machine learning internships"))
+    assert result == "Here are some internships."
+    assert client.models.calls == ["m1"]
+
+
 def test_write_tools_in_a_batch_are_serialized_and_approved():
     session = FakeSession("saved")
     calls = [ToolCall("save_opportunity", {}), ToolCall("update_status", {})]
