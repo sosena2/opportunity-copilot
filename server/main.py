@@ -19,9 +19,9 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
-from mcp.server import MCPServer  # noqa: E402
+from mcp.server import MCPServer  
 
-from server import cv, db, embeddings, github, matching, validation as v, web  # noqa: E402
+from server import auth, cv, db, embeddings, github, matching, validation as v, web  
 
 log = logging.getLogger("copilot.server")
 
@@ -332,9 +332,17 @@ if __name__ == "__main__":
     if args.transport == "stdio":
         mcp.run(transport="stdio")
     else:
-        mcp.run(
-            transport="streamable-http",
-            host=args.host,
-            port=args.port,
-            streamable_http_path="/mcp",
-        )
+        import anyio
+        import uvicorn
+
+        def run_authenticated_http() -> None:
+            token = auth.configured_token()
+            app = mcp.streamable_http_app(
+                host=args.host,
+                streamable_http_path="/mcp",
+            )
+            app.add_middleware(auth.BearerAuthMiddleware, expected_token=token, path="/mcp")
+            config = uvicorn.Config(app, host=args.host, port=args.port, log_level="info")
+            anyio.run(uvicorn.Server(config).serve)
+
+        run_authenticated_http()

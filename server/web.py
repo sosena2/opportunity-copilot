@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 
 from server import validation as v
+from server.errors import InputError
 
 log = logging.getLogger("copilot.web")
 
@@ -54,11 +55,11 @@ def check_host_public(host: str) -> None:
     try:
         infos = socket.getaddrinfo(host, None)
     except socket.gaierror:
-        raise ValueError("Could not find that website address.")
+        raise InputError("Could not find that website address.")
     for info in infos:
         ip = ipaddress.ip_address(info[4][0].split("%")[0])
         if not ip.is_global:
-            raise ValueError("That address is not a public website, so it is blocked.")
+            raise InputError("That address is not a public website, so it is blocked.")
 
 
 def looks_like_injection(text: str) -> bool:
@@ -122,7 +123,7 @@ def search(query: str, max_results: int) -> str:
         results = DDGS().text(query, max_results=max_results)
     except Exception:
         log.exception("web search failed")
-        raise RuntimeError(
+        raise InputError(
             "Web search is temporarily unavailable. Try again in a minute, "
             "or use fetch_page_text with a known link."
         )
@@ -160,16 +161,16 @@ def fetch_text(url: str) -> str:
                     if r.is_redirect:
                         location = r.headers.get("location")
                         if not location:
-                            raise ValueError("The website sent a broken redirect.")
+                            raise InputError("The website sent a broken redirect.")
                         current = urljoin(current, location)
                         continue
                     if r.status_code >= 400:
-                        raise ValueError(
+                        raise InputError(
                             f"The website returned HTTP {r.status_code}. Try a different link."
                         )
                     ctype = r.headers.get("content-type", "").split(";")[0].strip().lower()
                     if ctype not in ALLOWED_TYPES:
-                        raise ValueError(f"Cannot read this content type ({ctype or 'unknown'}).")
+                        raise InputError(f"Cannot read this content type ({ctype or 'unknown'}).")
                     body = bytearray()
                     for chunk in r.iter_bytes():
                         body.extend(chunk)
@@ -179,12 +180,12 @@ def fetch_text(url: str) -> str:
                     encoding = r.encoding or "utf-8"
                     break
             else:
-                raise ValueError("The website redirected too many times.")
+                raise InputError("The website redirected too many times.")
     except httpx.TimeoutException:
-        raise ValueError("The website took too long to respond.")
+        raise InputError("The website took too long to respond.")
     except httpx.HTTPError:
         log.warning("network error while fetching a page")
-        raise ValueError("Could not reach the website.")
+        raise InputError("Could not reach the website.")
 
     try:
         html = raw.decode(encoding, errors="replace")
@@ -193,7 +194,7 @@ def fetch_text(url: str) -> str:
 
     text = html_to_text(html)
     if not text:
-        raise ValueError("No readable text found. The page may need JavaScript to show content.")
+        raise InputError("No readable text found. The page may need JavaScript to show content.")
     if len(text) > MAX_TEXT_CHARS:
         text = text[:MAX_TEXT_CHARS] + " ...[truncated]"
 

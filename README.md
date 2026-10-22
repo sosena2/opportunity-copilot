@@ -27,7 +27,8 @@ Copy-Item .env.example .env
 ```
 
 Set `GEMINI_API_KEY` in `.env`. `GITHUB_TOKEN` is optional but helps avoid anonymous
-GitHub rate limits. Never commit `.env` or API keys.
+GitHub rate limits. Set `MCP_AUTH_TOKEN` to a long random value before using
+Streamable HTTP. Never commit `.env` or API keys.
 
 Put a text, Markdown, or text-based PDF CV in `data/cv/`. The checked-in
 `sample_cv.md` is safe demo data.
@@ -47,7 +48,16 @@ To use the Streamable HTTP transport, start the server in one terminal:
 python -m server.main --transport streamable-http --host 127.0.0.1 --port 8000
 ```
 
-The MCP endpoint is then available at `http://127.0.0.1:8000/mcp`. The custom
+The MCP endpoint is then available at `http://127.0.0.1:8000/mcp` and requires
+an Authorization bearer token matching `MCP_AUTH_TOKEN`. The server fails closed
+when the token is missing, compares it in constant time, and never logs token
+values. Stdio remains local-only and does not use HTTP authentication. For
+anything beyond localhost, terminate TLS at a trusted reverse proxy and rotate
+the token regularly; do not expose this demo directly over plain HTTP.
+
+In MCP Inspector, configure Streamable HTTP for this URL and add the same bearer
+token in its authentication/header field. A missing or invalid token returns 401.
+The custom
 Gemini client currently starts the local stdio server directly:
 
 ```powershell

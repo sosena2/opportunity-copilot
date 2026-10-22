@@ -141,6 +141,27 @@ def test_error_result_is_passed_back_and_long_output_is_cut():
     assert is_error and len(text) < 6100 and text.endswith("[truncated]")
 
 
+def test_tool_error_text_is_preserved_for_the_model():
+    session = FakeSession(
+        "Error executing tool update_status: no saved opportunity with id 999.",
+        is_error=True,
+    )
+    _, text, is_error = run(
+        agent.execute_tool(
+            session,
+            ToolCall("update_status", {"opportunity_id": 999}),
+            {"update_status"},
+            approve=lambda name, args: _approved(),
+        )
+    )
+    assert is_error
+    assert "no saved opportunity with id 999" in text
+
+
+async def _approved():
+    return True
+
+
 def test_read_tools_can_run_as_one_model_batch():
     session = FakeSession("results")
     calls = [ToolCall("read_cv", {}), ToolCall("read_cv", {})]
